@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket 视频流</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 30px;
+            max-width: 900px;
+            width: 100%;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+
+        .status {
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+
+        .status.connecting {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+
+        .status.connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+
+        .status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+
+        .video-container {
+            position: relative;
+            width: 100%;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        #videoCanvas {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .info {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .info p {
+            margin: 5px 0;
+        }
+
+        .info strong {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>实时视频流监控</h1>
+        <div id="status" class="status connecting">正在连接...</div>
+
+        <div class="video-container">
+            <canvas id="videoCanvas"></canvas>
+        </div>
+
+        <div class="info">
+            <p><strong>分辨率:</strong> <span id="resolution">加载中...</span></p>
+            <p><strong>帧率:</strong> <span id="fps">0</span> FPS</p>
+            <p><strong>总帧数:</strong> <span id="frameCount">0</span></p>
+            <p><strong>数据量:</strong> <span id="dataSize">0</span> MB</p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('videoCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        const resolutionSpan = document.getElementById('resolution');
+        const fpsSpan = document.getElementById('fps');
+        const frameCountSpan = document.getElementById('frameCount');
+        const dataSizeSpan = document.getElementById('dataSize');
+
+        let ws = null;
+        let frameCount = 0;
+        let totalDataSize = 0;
+        let lastFrameTime = Date.now();
+        let fpsCounter = 0;
+        let fpsInterval = null;
+
+        // 连接WebSocket
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}`;
+
+            ws = new WebSocket(wsUrl, 'webcam-stream');
+            ws.binaryType = 'arraybuffer';
+
+            ws.onopen = function() {
+                console.log('WebSocket连接已建立');
+                statusDiv.textContent = '已连接';
+                statusDiv.className = 'status connected';
+
+                // 启动FPS计数器
+                if (fpsInterval) clearInterval(fpsInterval);
+                fpsInterval = setInterval(() => {
+                    fpsSpan.textContent = fpsCounter;
+                    fpsCounter = 0;
+                }, 1000);
+            };
+
+            ws.onclose = function() {
+                console.log('WebSocket连接已关闭');
+                statusDiv.textContent = '连接已断开';
+                statusDiv.className = 'status disconnected';
+                if (fpsInterval) clearInterval(fpsInterval);
+
+                // 5秒后尝试重连
+                setTimeout(connect, 5000);
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket错误:', error);
+                statusDiv.textContent = '连接错误';
+                statusDiv.className = 'status disconnected';
+            };
+
+            ws.onmessage = function(event) {
+                const arrayBuffer = event.data;
+                totalDataSize += arrayBuffer.byteLength;
+
+                // 将ArrayBuffer转换为Blob
+                const blob = new Blob([arrayBuffer], { type: 'image/jpeg' });
+                const url = URL.createObjectURL(blob);
+
+                // 创建图片对象
+                const img = new Image();
+                img.onload = function() {
+                    // 设置canvas尺寸
+                    if (canvas.width !== img.width || canvas.height !== img.height) {
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        resolutionSpan.textContent = `${img.width} x ${img.height}`;
+                    }
+
+                    // 水平翻转并绘制图像
+                    ctx.save();
+                    ctx.scale(-1, 1);
+                    ctx.drawImage(img, -img.width, 0);
+                    ctx.restore();
+
+                    // 更新统计信息
+                    frameCount++;
+                    fpsCounter++;
+                    frameCountSpan.textContent = frameCount;
+                    dataSizeSpan.textContent = (totalDataSize / (1024 * 1024)).toFixed(2);
+
+                    // 释放URL对象
+                    URL.revokeObjectURL(url);
+                };
+                img.src = url;
+            };
+        }
+
+        // 页面加载时连接
+        window.addEventListener('load', connect);
+
+        // 页面卸载时关闭连接
+        window.addEventListener('beforeunload', function() {
+            if (ws) {
+                ws.close();
+            }
+        });
+    </script>
+</body>
+</html>
