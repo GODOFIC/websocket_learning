@@ -29,7 +29,7 @@ WebSocketServer::~WebSocketServer() {
 
 bool WebSocketServer::init(std::shared_ptr<WebcamCapture> capture) {
     webcam_capture_ = capture;
-    
+
     // 定义协议
     static struct lws_protocols protocols[] = {
         {
@@ -37,32 +37,60 @@ bool WebSocketServer::init(std::shared_ptr<WebcamCapture> capture) {
             callback_http,
             0,
             0,
+            0,
+            NULL,
+            0
         },
         {
             "webcam-stream",
             callback_websocket,
             sizeof(SessionData),
             1024 * 1024, // 1MB接收缓冲区
+            0,
+            NULL,
+            0
         },
-        { NULL, NULL, 0, 0 } // 终止符
+        { NULL, NULL, 0, 0, 0, NULL, 0 } // 终止符
     };
-    
+
+    // 定义HTTP挂载点（静态文件服务）
+    static const struct lws_http_mount mount = {
+        .mount_next = NULL,
+        .mountpoint = "/",
+        .origin = "../www",
+        .def = "index.html",
+        .protocol = NULL,
+        .cgienv = NULL,
+        .extra_mimetypes = NULL,
+        .interpret = NULL,
+        .cgi_timeout = 0,
+        .cache_max_age = 0,
+        .auth_mask = 0,
+        .cache_reusable = 0,
+        .cache_revalidate = 0,
+        .cache_intermediaries = 0,
+        .origin_protocol = LWSMPRO_FILE,
+        .mountpoint_len = 1,
+        .basic_auth_login_file = NULL,
+    };
+
     struct lws_context_creation_info info;
     memset(&info, 0, sizeof(info));
-    
+
     info.port = port_;
     info.protocols = protocols;
+    info.mounts = &mount;
     info.gid = -1;
     info.uid = -1;
     info.options = LWS_SERVER_OPTION_VALIDATE_UTF8;
-    
+
     context_ = lws_create_context(&info);
-    
+
     if (!context_) {
         std::cerr << "无法创建libwebsockets上下文" << std::endl;
         return false;
     }
-    
+
     std::cout << "WebSocket服务器初始化成功，监听端口: " << port_ << std::endl;
     return true;
 }
@@ -113,43 +141,43 @@ void WebSocketServer::broadcastFrame(const std::vector<uint8_t>& frame) {
 
 int WebSocketServer::callback_http(struct lws *wsi, enum lws_callback_reasons reason,
                                    void *user, void *in, size_t len) {
+    (void)wsi;
     (void)user;
     (void)len;
-    
+
     switch (reason) {
         case LWS_CALLBACK_HTTP: {
             const char* url = (const char*)in;
             std::cout << "HTTP请求: " << url << std::endl;
-            
-            // 提供HTML页面
-            if (strcmp(url, "/") == 0 || strcmp(url, "/index.html") == 0) {
-                const char* html_path = "www/index.html";
-
-                // 使用lws_serve_http_file提供静态文件，指定UTF-8编码
-                if (lws_serve_http_file(wsi, html_path, "text/html; charset=utf-8", NULL, 0) < 0) {
-                    std::cerr << "无法提供HTML文件: " << html_path << std::endl;
-                    return -1;
-                }
-                break;
-            }
-            
-            // 返回404
-            lws_return_http_status(wsi, HTTP_STATUS_NOT_FOUND, NULL);
-            return -1;
-        }
-        
-        case LWS_CALLBACK_HTTP_WRITEABLE:
-            // HTTP写完成
+            // mount会自动处理静态文件，这里只记录日志
+            // 返回1表示让libwebsockets使用mount处理
             break;
-            
+        }
+
+        case LWS_CALLBACK_HTTP_BODY:
+            // HTTP body接收
+            break;
+
+        case LWS_CALLBACK_HTTP_BODY_COMPLETION:
+            // HTTP body接收完成
+            break;
+
+        case LWS_CALLBACK_HTTP_WRITEABLE:
+            // HTTP可写
+            break;
+
         case LWS_CALLBACK_HTTP_FILE_COMPLETION:
-            // 文件传输完成，关闭连接
-            return -1;
-            
+            // 文件传输完成
+            break;
+
+        case LWS_CALLBACK_CLOSED_HTTP:
+            // HTTP连接关闭
+            break;
+
         default:
             break;
     }
-    
+
     return 0;
 }
 
